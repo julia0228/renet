@@ -1,4 +1,5 @@
-# renet_repo.py
+# renet_meanwt.py
+# 聚类后对样本加权
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -79,12 +80,14 @@ class RENet(nn.Module):
 
         # (S * C * Hs * Ws, Q * C * Hq * Wq) -> Q * S * Hs * Ws * Hq * Wq
         corr4d = self.get_4d_correlation_map(spt, qry)
-        num_qry, way, H_s, W_s, H_q, W_q = corr4d.size()
-
+        num_qry, way_shot, H_s, W_s, H_q, W_q = corr4d.size()
+        way = self.args.way
+        shot = self.args.shot
+        
         # corr4d refinement
         corr4d = self.cca_module(corr4d.view(-1, 1, H_s, W_s, H_q, W_q))
-        corr4d_s = corr4d.view(num_qry, way, H_s * W_s, H_q, W_q)
-        corr4d_q = corr4d.view(num_qry, way, H_s, W_s, H_q * W_q)
+        corr4d_s = corr4d.view(num_qry, way_shot, H_s * W_s, H_q, W_q)
+        corr4d_q = corr4d.view(num_qry, way_shot, H_s, W_s, H_q * W_q)
 
         # normalizing the entities for each side to be zero-mean and unit-variance to stabilize training
         corr4d_s = self.gaussian_normalize(corr4d_s, dim=2)
@@ -92,9 +95,9 @@ class RENet(nn.Module):
 
         # applying softmax for each side
         corr4d_s = F.softmax(corr4d_s / self.args.temperature_attn, dim=2)
-        corr4d_s = corr4d_s.view(num_qry, way, H_s, W_s, H_q, W_q)
+        corr4d_s = corr4d_s.view(num_qry, way_shot, H_s, W_s, H_q, W_q)
         corr4d_q = F.softmax(corr4d_q / self.args.temperature_attn, dim=4)
-        corr4d_q = corr4d_q.view(num_qry, way, H_s, W_s, H_q, W_q)
+        corr4d_q = corr4d_q.view(num_qry, way_shot, H_s, W_s, H_q, W_q)
 
         # suming up matching scores
         attn_s = corr4d_s.sum(dim=[4, 5])
@@ -104,12 +107,24 @@ class RENet(nn.Module):
         spt_attended = attn_s.unsqueeze(2) * spt.unsqueeze(0)
         qry_attended = attn_q.unsqueeze(2) * qry.unsqueeze(1)
 
-        # averaging embeddings for k > 1 shots
+        # # averaging embeddings for k > 1 shots
+        # if self.args.shot > 1:
+        #     spt_attended = spt_attended.view(num_qry, self.args.shot, self.args.way, *spt_attended.shape[2:])
+        #     qry_attended = qry_attended.view(num_qry, self.args.shot, self.args.way, *qry_attended.shape[2:])
+        #     spt_attended = spt_attended.mean(dim=1)
+        #     qry_attended = qry_attended.mean(dim=1)
+
+        # 计算聚类权重
         if self.args.shot > 1:
-            spt_attended = spt_attended.view(num_qry, self.args.shot, self.args.way, *spt_attended.shape[2:])
-            qry_attended = qry_attended.view(num_qry, self.args.shot, self.args.way, *qry_attended.shape[2:])
-            spt_attended = spt_attended.mean(dim=1)
-            qry_attended = qry_attended.mean(dim=1)
+            cluster_weights = self.compute_cluster_weights(spt, way, shot)
+        else:
+            cluster_weights = None
+            
+        # 使用聚类权重的多shot融合
+        if self.args.shot > 1:
+            spt_attended, qry_attended = self.cluster_weighted_fusion(
+                spt_attended, qry_attended, cluster_weights, num_qry, way, shot
+            )
 
         # In the main paper, we present averaging in Eq.(4) and summation in Eq.(5).
         # In the implementation, the order is reversed, however, those two ways become eventually the same anyway :)
@@ -174,3 +189,60 @@ class RENet(nn.Module):
             return F.adaptive_avg_pool2d(x, 1)
         else:
             return x
+    
+    def compute_cluster_weights(self, spt, way, shot):
+        """
+        基于聚类计算每个shot样本的权重
+        """
+        # 将特征展平以便聚类
+        spt_flat = spt.view(way * shot, -1)
+        
+        weights = torch.ones(way * shot, device=spt.device)
+        
+        for w in range(way):
+            start_idx = w * shot
+            end_idx = (w + 1) * shot
+            
+            if shot <= 1:
+                continue
+                
+            # 提取当前类别的所有shot样本
+            class_samples = spt_flat[start_idx:end_idx]
+            
+            # 方法1: 基于距离中心的简单聚类权重
+            center = class_samples.mean(dim=0)
+            distances = torch.cdist(class_samples, center.unsqueeze(0)).squeeze()
+            
+            # # 距离越小，权重越大（使用距离的倒数）
+            # # 添加小常数避免除零
+            # inv_distances = 1.0 / (distances + 1e-8)
+            
+            # # 归一化权重，使每个类别的权重和为1
+            # class_weights = inv_distances / inv_distances.sum()
+            
+            # 方法2: 基于标准差的距离权重（可选，更鲁棒）
+            std = class_samples.std(dim=0).mean()
+            normalized_distances = distances / (std + 1e-8)
+            class_weights = F.softmax(-normalized_distances, dim=0)
+            
+            weights[start_idx:end_idx] = class_weights
+        
+        return weights
+
+    def cluster_weighted_fusion(self, spt_attended, qry_attended, cluster_weights, num_qry, way, shot):
+        """
+        使用聚类权重进行多shot融合
+        """
+        # 重塑维度
+        spt_attended = spt_attended.view(num_qry, shot, way, *spt_attended.shape[2:])
+        qry_attended = qry_attended.view(num_qry, shot, way, *qry_attended.shape[2:])
+        
+        # 重塑权重以匹配维度
+        weights_reshaped = cluster_weights.view(1, shot, way, *([1] * (spt_attended.dim() - 3)))
+        weights_reshaped = weights_reshaped.repeat(num_qry, 1, 1, *([1] * (spt_attended.dim() - 3)))
+        
+        # 加权融合
+        spt_attended = (spt_attended * weights_reshaped).sum(dim=1)
+        qry_attended = (qry_attended * weights_reshaped).sum(dim=1)
+        
+        return spt_attended, qry_attended

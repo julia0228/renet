@@ -92,17 +92,29 @@ def train_main(args):
     model = RENet(args).cuda()
     model = nn.DataParallel(model, device_ids=args.device_ids)
 
+    start_epoch = 1
+    if getattr(args, 'resume_path', ''):
+        checkpoint = torch.load(args.resume_path)
+        model.load_state_dict(checkpoint['params'])
+        start_epoch = 61
+        print(f'[ log ] resumed model from {args.resume_path} at epoch {checkpoint.get("epoch", "unknown")}')
+
     if not args.no_wandb:
         wandb.watch(model)
     print(model)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, nesterov=True, weight_decay=0.0005)
+    if getattr(args, 'resume_opt_path', ''):
+        opt_state = torch.load(args.resume_opt_path)
+        optimizer.load_state_dict(opt_state)
+        print(f'[ log ] resumed optimizer from {args.resume_opt_path}')
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestones, gamma=args.gamma)
+    lr_scheduler.last_epoch = start_epoch - 1
 
     max_acc, max_epoch = 0.0, 0
     set_seed(args.seed)
 
-    for epoch in range(1, args.max_epoch + 1):
+    for epoch in range(start_epoch, args.max_epoch + 1):
         start_time = time.time()
 
         train_loss, train_acc, _ = train(epoch, model, train_loaders, optimizer, args)

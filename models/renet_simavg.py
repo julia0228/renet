@@ -1,4 +1,5 @@
-# renet_repo.py
+# renet_simavg.py
+# 先算sim，再avg shot
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -80,6 +81,7 @@ class RENet(nn.Module):
         # (S * C * Hs * Ws, Q * C * Hq * Wq) -> Q * S * Hs * Ws * Hq * Wq
         corr4d = self.get_4d_correlation_map(spt, qry)
         num_qry, way, H_s, W_s, H_q, W_q = corr4d.size()
+        # print("way of corr4d:", way) way * shot
 
         # corr4d refinement
         corr4d = self.cca_module(corr4d.view(-1, 1, H_s, W_s, H_q, W_q))
@@ -104,20 +106,35 @@ class RENet(nn.Module):
         spt_attended = attn_s.unsqueeze(2) * spt.unsqueeze(0)
         qry_attended = attn_q.unsqueeze(2) * qry.unsqueeze(1)
 
+        
+
         # averaging embeddings for k > 1 shots
         if self.args.shot > 1:
             spt_attended = spt_attended.view(num_qry, self.args.shot, self.args.way, *spt_attended.shape[2:])
             qry_attended = qry_attended.view(num_qry, self.args.shot, self.args.way, *qry_attended.shape[2:])
-            spt_attended = spt_attended.mean(dim=1)
-            qry_attended = qry_attended.mean(dim=1)
+        else:
+            spt_attended = spt_attended.view(num_qry, 1, self.args.way, *spt_attended.shape[2:])
+            qry_attended = qry_attended.view(num_qry, 1, self.args.way, *qry_attended.shape[2:])
+            
+        if H_q != H_s or W_q != W_s:
+            qry_attended = F.interpolate(qry_attended, size=(H_s, W_s), mode='bilinear', align_corners=False)
 
-        # In the main paper, we present averaging in Eq.(4) and summation in Eq.(5).
-        # In the implementation, the order is reversed, however, those two ways become eventually the same anyway :)
+        # print("qry_attended:",qry_attended.shape)
+
         spt_attended_pooled = spt_attended.mean(dim=[-1, -2])
         qry_attended_pooled = qry_attended.mean(dim=[-1, -2])
+        similarity = F.cosine_similarity(spt_attended_pooled, qry_attended_pooled, dim=-1)
+        # print("similarity 0:",similarity.shape)
+
+        similarity_matrix = similarity.mean(dim=1)
+
+        # # In the main paper, we present averaging in Eq.(4) and summation in Eq.(5).
+        # # In the implementation, the order is reversed, however, those two ways become eventually the same anyway :)
+        # spt_attended_pooled = spt_attended.mean(dim=[-1, -2])
+        # qry_attended_pooled = qry_attended.mean(dim=[-1, -2])
         qry_pooled = qry.mean(dim=[-1, -2])
 
-        similarity_matrix = F.cosine_similarity(spt_attended_pooled, qry_attended_pooled, dim=-1)
+        # similarity_matrix = F.cosine_similarity(spt_attended_pooled, qry_attended_pooled, dim=-1)
 
         if self.training:
             return similarity_matrix / self.args.temperature, self.fc(qry_pooled)

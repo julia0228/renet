@@ -1,1 +1,2 @@
-python train.py -batch 128 -dataset miniimagenet -gpu 1 -extra_dir your_run -temperature_attn 5.0 -lamb 0.25 -shot 5 -milestones 40 50 -max_epoch 60
+# python train.py -batch 128 -dataset miniimagenet -gpu 0 -extra_dir "bigsim" -temperature_attn 5.0 -lamb 0.25 -shot 5 -milestones 40 50 -max_epoch 80 -resume_path "checkpoints/miniimagenet/5shot-5way/bigsim/max_acc.pth" -resume_opt_path "checkpoints/miniimagenet/5shot-5way/bigsim/optimizer_max_acc.pth" -no_wandb
+python train.py -batch 128 -dataset miniimagenet -gpu 0 -extra_dir "bigsim" -temperature_attn 5.0 -lamb 0.25 -shot 5 -milestones 40 50 -max_epoch 60 -no_wandb
