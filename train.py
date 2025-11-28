@@ -1,3 +1,4 @@
+# train with pseudo
 import os
 import tqdm
 import time
@@ -13,6 +14,7 @@ from common.utils import detect_grad_nan, compute_accuracy, set_seed, setup_run
 from models.dataloader.samplers import CategoriesSampler
 from models.dataloader.data_utils import dataset_builder
 from models.renet import RENet
+from models.support_aug import build_support_augmentation
 from test import test_main, evaluate
 
 
@@ -44,7 +46,19 @@ def train(epoch, model, loader, optimizer, args=None):
         # loss for batch
         model.module.mode = 'cca'
         data_shot, data_query = data[:k], data[k:]
-        logits, absolute_logits = model((data_shot.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1), data_query))
+
+        use_support_aug = args.use_support_aug and epoch > args.pretrain_epoch
+
+        if use_support_aug:
+            with torch.no_grad():
+                logits_first, _ = model((data_shot.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1), data_query))
+                probs = F.softmax(logits_first, dim=-1)
+            data_shot_aug, support_weights = build_support_augmentation(data_shot, data_query, probs, model.module, args)
+            support_weights = support_weights.to(data_shot.device)
+            logits, absolute_logits = model((data_shot_aug.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1),
+                                             data_query, support_weights))
+        else:
+            logits, absolute_logits = model((data_shot.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1), data_query))
         epi_loss = F.cross_entropy(logits, label)
         absolute_loss = F.cross_entropy(absolute_logits, train_labels[k:])
 
@@ -92,17 +106,44 @@ def train_main(args):
     model = RENet(args).cuda()
     model = nn.DataParallel(model, device_ids=args.device_ids)
 
+    start_epoch = 1
+    if getattr(args, 'resume_path', ''):
+        checkpoint = torch.load(args.resume_path)
+        model.load_state_dict(checkpoint['params'])
+        start_epoch = 61
+        print(f'[ log ] resumed model from {args.resume_path} at epoch {checkpoint.get("epoch", "unknown")}')
+
     if not args.no_wandb:
         wandb.watch(model)
     print(model)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, nesterov=True, weight_decay=0.0005)
+    if args.use_support_aug and model.module.support_weight_net is not None:
+        base_params, swn_params = [], []
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+            if 'support_weight_net' in name:
+                swn_params.append(param)
+            else:
+                base_params.append(param)
+        optimizer = torch.optim.SGD(
+            [{'params': base_params, 'lr': args.lr},
+             {'params': swn_params, 'lr': args.swn_lr}],
+            momentum=0.9, nesterov=True, weight_decay=0.0005
+        )
+    else:
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, nesterov=True, weight_decay=0.0005)
+    if getattr(args, 'resume_opt_path', ''):
+        opt_state = torch.load(args.resume_opt_path)
+        optimizer.load_state_dict(opt_state)
+        print(f'[ log ] resumed optimizer from {args.resume_opt_path}')
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.milestones, gamma=args.gamma)
+    lr_scheduler.last_epoch = start_epoch - 1
 
     max_acc, max_epoch = 0.0, 0
     set_seed(args.seed)
 
-    for epoch in range(1, args.max_epoch + 1):
+    for epoch in range(start_epoch, args.max_epoch + 1):
         start_time = time.time()
 
         train_loss, train_acc, _ = train(epoch, model, train_loaders, optimizer, args)
@@ -138,3 +179,4 @@ if __name__ == '__main__':
 
     if not args.no_wandb:
         wandb.log({'test/acc': test_acc, 'test/confidence_interval': test_ci})
+

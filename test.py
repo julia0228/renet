@@ -1,3 +1,4 @@
+# test with pseudo
 import os
 import tqdm
 import torch
@@ -11,6 +12,7 @@ from common.utils import compute_accuracy, load_model, setup_run, by
 from models.dataloader.samplers import CategoriesSampler
 from models.dataloader.data_utils import dataset_builder
 from models.renet import RENet
+from models.support_aug import build_support_augmentation
 
 
 def evaluate(epoch, model, loader, args=None, set='val'):
@@ -32,7 +34,19 @@ def evaluate(epoch, model, loader, args=None, set='val'):
             data_shot, data_query = data[:k], data[k:]
             model.module.mode = 'cca'
 
-            logits = model((data_shot.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1), data_query))
+            use_support_aug = args.use_support_aug and model.module.support_weight_net is not None
+
+            if use_support_aug:
+                logits_first = model((data_shot.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1), data_query))
+                probs = F.softmax(logits_first, dim=-1)
+                data_shot_aug, support_weights = build_support_augmentation(
+                    data_shot, data_query, probs, model.module, args
+                )
+                support_weights = support_weights.to(data_shot.device)
+                logits = model((data_shot_aug.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1),
+                                data_query, support_weights))
+            else:
+                logits = model((data_shot.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1), data_query))
             loss = F.cross_entropy(logits, label)
             acc = compute_accuracy(logits, label)
 

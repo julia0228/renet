@@ -1,3 +1,4 @@
+# train with pseudo
 import os
 import wandb
 import torch
@@ -140,6 +141,8 @@ def parse_args(arg_mode):
     parser.add_argument('-batch', type=int, default=128, help='auxiliary batch size')
     parser.add_argument('-temperature', type=float, default=0.2, metavar='tau', help='temperature for metric-based loss')
     parser.add_argument('-lamb', type=float, default=0.25, metavar='lambda', help='loss balancing term')
+    parser.add_argument('-swn_lr', type=float, default=0.01, help='learning rate for support weight network')
+    parser.add_argument('-pretrain_epoch', type=int, default=10, help='epochs to train without support augmentation')
 
     ''' about training schedules '''
     parser.add_argument('-max_epoch', type=int, default=80, help='max epoch to run')
@@ -147,6 +150,8 @@ def parse_args(arg_mode):
     parser.add_argument('-gamma', type=float, default=0.05, help='learning rate decay factor')
     parser.add_argument('-milestones', nargs='+', type=int, default=[60, 70], help='milestones for MultiStepLR')
     parser.add_argument('-save_all', action='store_true', help='save models on each epoch')
+    parser.add_argument('-resume_path', type=str, default='', help='checkpoint path to resume model weights')
+    parser.add_argument('-resume_opt_path', type=str, default='', help='optimizer checkpoint path to resume state')
 
     ''' about few-shot episodes '''
     parser.add_argument('-way', type=int, default=5, metavar='N', help='number of few-shot classes')
@@ -157,6 +162,10 @@ def parse_args(arg_mode):
 
     ''' about SCR '''
     parser.add_argument('-self_method', type=str, default='scr')
+    parser.add_argument('-use_support_aug', action='store_true', help='enable pseudo-labeled support augmentation')
+    parser.add_argument('-pseudo_thresh', type=float, default=0.0, help='probability threshold for pseudo support selection')
+    parser.add_argument('-aug_weight_hidden', type=int, default=256, help='hidden dim for support augmentation weight net')
+    parser.add_argument('-support_weight_temperature', type=float, default=1.0, help='temperature for support-shot weighting softmax')
 
     ''' about CCA '''
     parser.add_argument('-temperature_attn', type=float, default=5.0, metavar='gamma', help='temperature for softmax in computing cross-attention')

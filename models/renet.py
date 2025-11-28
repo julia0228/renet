@@ -1,3 +1,4 @@
+# renet_pseudo.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,6 +10,7 @@ from models.others.se import SqueezeExcitation
 from models.others.lsa import LocalSelfAttention
 from models.others.nlsa import NonLocalSelfAttention
 from models.others.sce import SpatialContextEncoder
+from models.others.swn import SupportWeightNet
 
 
 class RENet(nn.Module):
@@ -29,6 +31,7 @@ class RENet(nn.Module):
             nn.BatchNorm2d(64),
             nn.ReLU()
         )
+        self.support_weight_net = SupportWeightNet(self.encoder_dim, self.args.way) if getattr(self.args, 'use_support_aug', False) else None
 
     def _make_scr_layer(self, planes):
         stride, kernel_size, padding = (1, 1, 1), (5, 5), 2
@@ -60,8 +63,12 @@ class RENet(nn.Module):
         elif self.mode == 'encoder':
             return self.encode(input, False)
         elif self.mode == 'cca':
-            spt, qry = input
-            return self.cca(spt, qry)
+            if isinstance(input, (tuple, list)) and len(input) == 3:
+                spt, qry, support_weights = input
+            else:
+                spt, qry = input
+                support_weights = None
+            return self.cca(spt, qry, support_weights)
         else:
             raise ValueError('Unknown mode')
 
@@ -69,7 +76,7 @@ class RENet(nn.Module):
         x = x.mean(dim=[-1, -2])
         return self.fc(x)
 
-    def cca(self, spt, qry):
+    def cca(self, spt, qry, support_weights=None):
         spt = spt.squeeze(0)
 
         # shifting channel activations by the channel mean
@@ -78,12 +85,14 @@ class RENet(nn.Module):
 
         # (S * C * Hs * Ws, Q * C * Hq * Wq) -> Q * S * Hs * Ws * Hq * Wq
         corr4d = self.get_4d_correlation_map(spt, qry)
-        num_qry, way, H_s, W_s, H_q, W_q = corr4d.size()
+        num_qry, num_spt, H_s, W_s, H_q, W_q = corr4d.size()
+        way = self.args.way
+        shot = max(num_spt // way, 1)
 
         # corr4d refinement
         corr4d = self.cca_module(corr4d.view(-1, 1, H_s, W_s, H_q, W_q))
-        corr4d_s = corr4d.view(num_qry, way, H_s * W_s, H_q, W_q)
-        corr4d_q = corr4d.view(num_qry, way, H_s, W_s, H_q * W_q)
+        corr4d_s = corr4d.view(num_qry, num_spt, H_s * W_s, H_q, W_q)
+        corr4d_q = corr4d.view(num_qry, num_spt, H_s, W_s, H_q * W_q)
 
         # normalizing the entities for each side to be zero-mean and unit-variance to stabilize training
         corr4d_s = self.gaussian_normalize(corr4d_s, dim=2)
@@ -91,9 +100,9 @@ class RENet(nn.Module):
 
         # applying softmax for each side
         corr4d_s = F.softmax(corr4d_s / self.args.temperature_attn, dim=2)
-        corr4d_s = corr4d_s.view(num_qry, way, H_s, W_s, H_q, W_q)
+        corr4d_s = corr4d_s.view(num_qry, num_spt, H_s, W_s, H_q, W_q)
         corr4d_q = F.softmax(corr4d_q / self.args.temperature_attn, dim=4)
-        corr4d_q = corr4d_q.view(num_qry, way, H_s, W_s, H_q, W_q)
+        corr4d_q = corr4d_q.view(num_qry, num_spt, H_s, W_s, H_q, W_q)
 
         # suming up matching scores
         attn_s = corr4d_s.sum(dim=[4, 5])
@@ -104,10 +113,16 @@ class RENet(nn.Module):
         qry_attended = attn_q.unsqueeze(2) * qry.unsqueeze(1)
 
         # averaging embeddings for k > 1 shots
-        if self.args.shot > 1:
-            spt_attended = spt_attended.view(num_qry, self.args.shot, self.args.way, *spt_attended.shape[2:])
-            qry_attended = qry_attended.view(num_qry, self.args.shot, self.args.way, *qry_attended.shape[2:])
-            spt_attended = spt_attended.mean(dim=1)
+        if shot > 1:
+            spt_attended = spt_attended.view(num_qry, shot, way, *spt_attended.shape[2:])
+            qry_attended = qry_attended.view(num_qry, shot, way, *qry_attended.shape[2:])
+            if support_weights is None:
+                spt_attended = spt_attended.mean(dim=1)
+            else:
+                weights = support_weights.permute(1, 0).unsqueeze(0)
+                for _ in range(spt_attended.dim() - 3):
+                    weights = weights.unsqueeze(-1)
+                spt_attended = (spt_attended * weights).sum(dim=1)
             qry_attended = qry_attended.mean(dim=1)
 
         # In the main paper, we present averaging in Eq.(4) and summation in Eq.(5).
