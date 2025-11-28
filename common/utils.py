@@ -113,6 +113,8 @@ def set_seed(seed):
 
 def detect_grad_nan(model):
     for param in model.parameters():
+        if param.grad is None:
+            continue
         if (param.grad != param.grad).float().sum() != 0:  # nan detected
             param.grad.zero_()
 
@@ -162,8 +164,9 @@ def parse_args(arg_mode):
 
     ''' about SCR '''
     parser.add_argument('-self_method', type=str, default='scr')
-    parser.add_argument('-use_support_aug', action='store_true', help='enable pseudo-labeled support augmentation')
+    parser.add_argument('-use_support_aug', action='store_true', default=True, help='enable pseudo-labeled support augmentation')
     parser.add_argument('-pseudo_thresh', type=float, default=0.0, help='probability threshold for pseudo support selection')
+    parser.add_argument('-pseudo_topk', type=int, default=1, help='number of pseudo supports selected per class')
     parser.add_argument('-aug_weight_hidden', type=int, default=256, help='hidden dim for support augmentation weight net')
     parser.add_argument('-support_weight_temperature', type=float, default=1.0, help='temperature for support-shot weighting softmax')
 

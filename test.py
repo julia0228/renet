@@ -34,13 +34,13 @@ def evaluate(epoch, model, loader, args=None, set='val'):
             data_shot, data_query = data[:k], data[k:]
             model.module.mode = 'cca'
 
-            use_support_aug = args.use_support_aug and model.module.support_weight_net is not None
+            use_support_aug = args.use_support_aug
 
             if use_support_aug:
                 logits_first = model((data_shot.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1), data_query))
                 probs = F.softmax(logits_first, dim=-1)
-                data_shot_aug, support_weights = build_support_augmentation(
-                    data_shot, data_query, probs, model.module, args
+                data_shot_aug, support_weights, _ = build_support_augmentation(
+                    data_shot, data_query, probs, args
                 )
                 support_weights = support_weights.to(data_shot.device)
                 logits = model((data_shot_aug.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1),

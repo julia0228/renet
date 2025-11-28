@@ -10,7 +10,6 @@ from models.others.se import SqueezeExcitation
 from models.others.lsa import LocalSelfAttention
 from models.others.nlsa import NonLocalSelfAttention
 from models.others.sce import SpatialContextEncoder
-from models.others.swn import SupportWeightNet
 
 
 class RENet(nn.Module):
@@ -31,7 +30,6 @@ class RENet(nn.Module):
             nn.BatchNorm2d(64),
             nn.ReLU()
         )
-        self.support_weight_net = SupportWeightNet(self.encoder_dim, self.args.way) if getattr(self.args, 'use_support_aug', False) else None
 
     def _make_scr_layer(self, planes):
         stride, kernel_size, padding = (1, 1, 1), (5, 5), 2
