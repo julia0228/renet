@@ -1,3 +1,4 @@
+# test with pseudo
 import os
 import tqdm
 import torch
@@ -8,9 +9,11 @@ from torch.utils.data import DataLoader
 
 from common.meter import Meter
 from common.utils import compute_accuracy, load_model, setup_run, by
-from models.dataloader.samplers import CategoriesSampler
+from models.dataloader.samplers import CategoriesSampler, PairedCategoriesSampler
 from models.dataloader.data_utils import dataset_builder
+from models.dataloader.pair_dataset import PairedDataset
 from models.renet import RENet
+from models.support_aug import build_support_augmentation
 
 
 def evaluate(epoch, model, loader, args=None, set='val'):
@@ -25,14 +28,39 @@ def evaluate(epoch, model, loader, args=None, set='val'):
     tqdm_gen = tqdm.tqdm(loader)
 
     with torch.no_grad():
-        for i, (data, labels) in enumerate(tqdm_gen, 1):
+        for i, batch in enumerate(tqdm_gen, 1):
+            # 解析批次数据 - 新的数据格式
+            (data, labels), unlabeled_data = batch
+            
             data = data.cuda()
+            unlabeled_data = unlabeled_data.cuda()  # 无标签数据也需要移动到GPU
+
+            # 移除多余的批次维度
+            if data.dim() == 5 and data.size(0) == 1:
+                data = data.squeeze(0)
+            if labels.dim() > 1 and labels.size(0) == 1:
+                labels = labels.squeeze(0)
+            if unlabeled_data.dim() == 5 and unlabeled_data.size(0) == 1:
+                unlabeled_data = unlabeled_data.squeeze(0)
+            
             model.module.mode = 'encoder'
             data = model(data)
+            # 如果需要，也可以对无标签数据进行编码
+            data_un = model(unlabeled_data)
+            
             data_shot, data_query = data[:k], data[k:]
             model.module.mode = 'cca'
 
-            logits = model((data_shot.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1), data_query))
+            logits_first = model((data_shot.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1), data_un))
+            probs = F.softmax(logits_first, dim=-1)
+            data_shot_aug, support_weights, _ = build_support_augmentation(
+                    data_shot, data_query, probs, args
+            )
+            support_weights = support_weights.to(data_shot.device)
+
+            logits = model((data_shot_aug.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1),
+                                data_query, support_weights))
+
             loss = F.cross_entropy(logits, label)
             acc = compute_accuracy(logits, label)
 
@@ -50,9 +78,31 @@ def test_main(model, args):
 
     ''' define test dataset '''
     Dataset = dataset_builder(args)
-    test_set = Dataset('test', args)
-    sampler = CategoriesSampler(test_set.label, args.test_episode, args.way, args.shot + args.query)
-    test_loader = DataLoader(test_set, batch_sampler=sampler, num_workers=8, pin_memory=True)
+    # 创建测试集的有标签和无标签数据集
+    testset_labeled = Dataset('test', args)
+    testset_unlabeled = Dataset('test_unlabeled', args)  # 假设你有测试集的无标签数据
+
+    # 创建测试集的配对采样器
+    test_sampler = PairedCategoriesSampler(
+        labeled_label=testset_labeled.label,
+        unlabeled_label=testset_unlabeled.label,
+        n_batch=args.test_episode,
+        n_cls=args.way,
+        n_per_labeled=args.shot + args.query,
+        n_per_unlabeled=args.unlabeled
+    )
+
+    # 创建测试集的配对数据集
+    paired_testset = PairedDataset(testset_labeled, testset_unlabeled, test_sampler)
+
+    # 创建测试集的数据加载器
+    test_loader = DataLoader(
+        dataset=paired_testset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=8,
+        pin_memory=True
+    )
 
     ''' evaluate the model with the dataset '''
     _, test_acc, test_ci = evaluate("best", model, test_loader, args, set='test')

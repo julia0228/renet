@@ -1,1 +1,1 @@
-python train.py -batch 128 -dataset miniimagenet -gpu 1 -extra_dir your_run -temperature_attn 5.0 -lamb 0.25
+python train.py -batch 128 -dataset miniimagenet -gpu 0 -extra_dir "first-try" -temperature_attn 5.0 -lamb 0.25 -no_wandb -pretrain_epoch 0 -resume_path /root/renet_repo/checkpoints/miniimagenet/1shot-5way/repo/max_acc.pth -resume_opt_path /root/renet_repo/checkpoints/miniimagenet/1shot-5way/repo/optimizer_max_acc.pth
