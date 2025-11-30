@@ -159,12 +159,13 @@ def parse_args(arg_mode):
     parser.add_argument('-way', type=int, default=5, metavar='N', help='number of few-shot classes')
     parser.add_argument('-shot', type=int, default=1, metavar='K', help='number of shots')
     parser.add_argument('-query', type=int, default=15, help='number of query image per class')
+    parser.add_argument('-unlabeled', type=int, default=10, help='number of unlabeled image per class')
     parser.add_argument('-val_episode', type=int, default=200, help='number of validation episode')
     parser.add_argument('-test_episode', type=int, default=2000, help='number of testing episodes after training')
 
     ''' about SCR '''
     parser.add_argument('-self_method', type=str, default='scr')
-    parser.add_argument('-use_support_aug', action='store_true', default=True, help='enable pseudo-labeled support augmentation')
+    # parser.add_argument('-use_support_aug', action='store_true', default=True, help='enable pseudo-labeled support augmentation')
     parser.add_argument('-pseudo_thresh', type=float, default=0.0, help='probability threshold for pseudo support selection')
     parser.add_argument('-pseudo_topk', type=int, default=1, help='number of pseudo supports selected per class')
     parser.add_argument('-aug_weight_hidden', type=int, default=256, help='hidden dim for support augmentation weight net')

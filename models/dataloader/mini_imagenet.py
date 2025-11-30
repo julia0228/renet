@@ -36,7 +36,7 @@ class MiniImageNet(Dataset):
         self.num_class = len(set(label))
         self.return_path = return_path
 
-        if setname == 'val' or setname == 'test':
+        if setname == 'val' or setname == 'test' or setname == 'val_unlabeled' or setname == 'test_unlabeled':
 
             image_size = 84
             resize_size = 92
@@ -48,7 +48,7 @@ class MiniImageNet(Dataset):
                 transforms.ToTensor(),
                 transforms.Normalize(np.array([x / 255.0 for x in [125.3, 123.0, 113.9]]),
                                      np.array([x / 255.0 for x in [63.0, 62.1, 66.7]]))])
-        elif setname == 'train':
+        elif setname == 'train' or setname == 'train_unlabeled':
             image_size = 84
             self.transform = transforms.Compose([
                 transforms.RandomResizedCrop(image_size),
