@@ -134,6 +134,24 @@ def train(epoch, model, loader, optimizer, args=None):
         # 与 episodic 的 few-shot logits 不同，后者只在当前 episode 的 way 个类别上做分类。
         logits, absolute_logits = model((data_shot_aug.unsqueeze(0).repeat(args.num_gpu, 1, 1, 1, 1),
                                              data_query, support_weights))
+        
+        # if i <= 3:
+        #     way = args.way
+        #     shot = args.shot
+        #     total_correct_episode = 0
+        #     total_count_episode = 0
+        #     for c in range(way):
+        #         idxs = pseudo_indices[c].view(-1)
+        #         confs = probs[idxs, c]
+        #         weights = support_weights[c, shot:shot + confs.size(0)]
+        #         labels = un_label[idxs]
+        #         correct = (labels == c).int()
+        #         total_correct_episode += correct.sum().item()
+        #         total_count_episode += correct.numel()
+        #         for j in range(confs.size(0)):
+        #             print(f'[pseudo-episode {i}] class:{c} idx:{idxs[j].item()} prob:{confs[j].item():.4f} weight:{weights[j].item():.4f} label:{labels[j].item()} correct:{correct[j].item()}')
+        #     if total_count_episode > 0:
+        #         print(f'[pseudo-episode {i}] acc:{(total_correct_episode / total_count_episode):.3f} count:{int(total_count_episode)}')
 
         # # pseudo query 使用第一次前向的预测参与额外的监督损失
         # pseudo_logits = logits_first[pseudo_flat]

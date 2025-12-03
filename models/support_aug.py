@@ -25,7 +25,9 @@ def build_support_augmentation(data_shot, data_un, probs, args):
         conf, idx = torch.topk(class_scores, k=k, largest=True)
         feat_maps = data_un[idx]
         aug_feats.append(feat_maps)
-        pseudo_weights.append(conf)
+        # pseudo_weights.append(conf)
+        thresh_weights = torch.where(conf > 0.7, torch.ones_like(conf), torch.full_like(conf, 0.9))
+        pseudo_weights.append(thresh_weights)
         pseudo_indices.append(idx)
     
     # 将伪标签样本转换为类别优先排列
